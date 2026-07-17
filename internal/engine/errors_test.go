@@ -1,0 +1,181 @@
+package engine
+
+import (
+	"errors"
+	"io"
+	"testing"
+
+	"github.com/tsvsheet/go-isnow/internal/constants"
+)
+
+// parseErr asserts that Parse(src) fails with the given sentinel.
+func parseErr(t *testing.T, src PatternText, want error) {
+	t.Helper()
+	if _, err := Parse(src); !errors.Is(err, want) {
+		t.Fatalf("Parse(%q) err = %v, want %v", src, err, want)
+	}
+}
+
+func TestContextErrors(t *testing.T) {
+	cases := []PatternText{
+		"/// noon",           // four date slots
+		"::: noon",           // four time slots
+		"2000// 2001// noon", // two date groups
+		"M/1 noon",           // weekday name in the month field
+		"M-F/1 noon",         // weekday span in the month field
+		"*/*/-2-5 noon",      // from-end with a range
+		"6 7",                // two bare numbers, hour claimed twice
+		"noon 6:00",          // time symbol beside a time group
+		"2 12:00",            // numeric weekday without the three-group form
+		"noon >=6,12",        // a set inside a bound
+		"noon >=M",           // a weekday inside a bound
+		"12 <:0",             // a time bound not anchored at the hour
+		"12 <::0",            // a second bound without hour or minute
+		"12 >=6::0",          // a second bound with an hour but no minute
+		"noon >=*",           // a bound that constrains nothing
+		"*-5",                // open-low span
+		"-*",                 // from-end of a wildcard
+		"-1// noon",          // unbounded year from-end
+	}
+	for _, src := range cases {
+		parseErr(t, src, constants.ErrContext)
+	}
+}
+
+func TestSymbolErrors(t *testing.T) {
+	for _, src := range []PatternText{
+		"M,T noon",   // T is ambiguous inside a weekday set
+		"MWF-F noon", // a run cannot be a span endpoint
+		"*/*/5x noon",
+		"mid",
+	} {
+		parseErr(t, src, constants.ErrSymbol)
+	}
+}
+
+func TestRangeErrors(t *testing.T) {
+	for _, src := range []PatternText{
+		"25",            // hour out of range
+		"2016-2011// n", // descending year span
+		"12 >=25",       // hour bound out of range
+		"::+[0]",        // a zero step
+	} {
+		parseErr(t, src, constants.ErrRange)
+	}
+}
+
+func TestSyntaxError(t *testing.T) {
+	parseErr(t, "M+[3", constants.ErrSyntax)
+}
+
+func TestBoundTimeGroup(t *testing.T) {
+	// A time group (not a bare number) inside a bound.
+	p := mustParse(t, "noon >=6:30")
+	if p.Canonical() == "" {
+		t.Fatal("empty canonical")
+	}
+}
+
+func TestYearCycleStepsAreContext(t *testing.T) {
+	// Year has no natural cycle: elided and from-end year steps are rejected
+	// (the window-as-cycle feature is deferred, decision 004).
+	for _, src := range []PatternText{
+		"+[4]// noon",             // elided-anchor year step
+		"2000-[2]// noon",         // from-end year step
+		"-1// noon >=2011 <=2015", // year from-end even when bounded
+	} {
+		parseErr(t, src, constants.ErrContext)
+	}
+}
+
+func TestYearArithmeticStepAllowed(t *testing.T) {
+	// A numeric-anchor forward year step is an open progression (no cycle).
+	if _, err := Parse("2000+[4]// noon"); err != nil {
+		t.Fatalf("2000+[4] should parse: %v", err)
+	}
+}
+
+func TestCodeNilAndUnknown(t *testing.T) {
+	if got := Code(nil); got != "" {
+		t.Fatalf("Code(nil) = %q, want empty", got)
+	}
+	if got := Code(io.EOF); got != "" {
+		t.Fatalf("Code(io.EOF) = %q, want empty", got)
+	}
+}
+
+func TestWeekStepNonDayIsContext(t *testing.T) {
+	parseErr(t, ":+[3w]", constants.ErrContext) // week unit on the minute field
+}
+
+func TestMoreErrorBranches(t *testing.T) {
+	cases := []struct {
+		want error
+		src  PatternText
+	}{
+		{src: "25-30", want: constants.ErrRange},             // span lo out of domain
+		{src: "25-30+[2]", want: constants.ErrRange},         // span-step with a bad span
+		{src: "8-25", want: constants.ErrRange},              // span hi out of domain
+		{src: "M-T noon", want: constants.ErrSymbol},         // ambiguous span endpoint
+		{src: "M,T+[1] noon", want: constants.ErrSymbol},     // ambiguous weekday in an occurrence step
+		{src: "*/*/M+[3w] noon", want: constants.ErrContext}, // name anchor on a week step
+		{src: "*/*/1+[0w] noon", want: constants.ErrRange},   // zero week step
+		{src: ":M+[2]", want: constants.ErrContext},          // name anchor on an arithmetic step
+		{src: ":99999+[2]", want: constants.ErrRange},        // anchor out of domain
+		{src: "8-12+[0]", want: constants.ErrRange},          // zero step on a span-step
+		{src: "noon >=5x", want: constants.ErrSymbol},        // bad unit inside a bound
+		{src: "1-2x noon", want: constants.ErrSymbol},        // bad unit on a span high
+		{src: "0-A", want: constants.ErrContext},             // numeric low with a symbolic high
+		{src: "M-5 noon", want: constants.ErrContext},        // symbolic low with a numeric high
+	}
+	for _, c := range cases {
+		parseErr(t, c.src, c.want)
+	}
+}
+
+func TestGuardsRejectSilentWrong(t *testing.T) {
+	rangeCases := []PatternText{
+		":0+[90]",                   // stride >= minute cycle
+		"0+[25]",                    // stride >= hour cycle
+		"::+[60]",                   // stride == second cycle
+		"/-40",                      // tail longer than the day cycle
+		"/-0",                       // zero-length tail
+		"*/*/* -2w 12:00",           // weekday tail (14 days) exceeds the 7-day cycle
+		":0+[99999999999999999999]", // overflow stride
+		"/-99999999999999999999",    // overflow tail
+		"Monday+[0] noon",           // occurrence index 0
+		"Monday+[6] noon",           // occurrence index > 5
+		"11/ Th-[6] noon",           // from-end occurrence index > 5
+		"/+[99w] noon",              // week stride > 53
+		"/5+[3w] noon",              // week anchor >= stride
+	}
+	for _, src := range rangeCases {
+		parseErr(t, src, constants.ErrRange)
+	}
+}
+
+func TestNumericWeekdaySpanRendersNames(t *testing.T) {
+	got := mustParse(t, "*/*/* 2-6 12:00").Canonical()
+	if got != "*/*/* Monday-Friday 12:00:00" {
+		t.Fatalf("Canonical = %q", got)
+	}
+	// A numeric weekday step anchor stays numeric (arithmetic, not occurrence).
+	if got := mustParse(t, "*/*/* 2+[1] 12:00").Canonical(); got != "*/*/* 2+[1] 12:00:00" {
+		t.Fatalf("step anchor Canonical = %q", got)
+	}
+}
+
+func TestYearStepUnbounded(t *testing.T) {
+	// Year steps are open progressions with no cycle guard.
+	if got := mustParse(t, "2000+[100]// noon").Canonical(); got != "2000+[100]/*/* * 12:00:00" {
+		t.Fatalf("year step Canonical = %q", got)
+	}
+}
+
+func TestStarAnchorStepCanonical(t *testing.T) {
+	// A wildcard step anchor renders as '*'.
+	got := mustParse(t, "::*+[2]").Canonical()
+	if got != "*/*/* * *:*:*+[2]" {
+		t.Fatalf("Canonical = %q", got)
+	}
+}
