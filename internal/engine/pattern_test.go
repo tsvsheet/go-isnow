@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -193,4 +195,39 @@ func twoDigit(n int) string {
 		return "0" + string(rune('0'+n))
 	}
 	return string(rune('0'+n/10)) + string(rune('0'+n%10))
+}
+
+// TestPatternIsSafeToCopyAndShare pins the immutability its doc claims, which
+// is what lets a caller keep one parsed pattern in a struct field and hand
+// copies to goroutines without a mutex. If evaluation mutated the receiver —
+// caching a derived bound, say — two schedulers sharing a pattern would
+// interfere, and the symptom would be a missed fire under load and nothing
+// reproducible afterwards.
+func TestPatternIsSafeToCopyAndShare(t *testing.T) {
+	t.Parallel()
+	original, err := Parse("*/*/* M-F 09:00")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	duplicate := original
+	before := original.String()
+
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			at := time.Date(2026, 7, 1+i%28, 9, 0, 0, 0, time.UTC)
+			_, _, _ = duplicate.NextContext(context.Background(), at)
+			_ = duplicate.Holds(at)
+		}()
+	}
+	wg.Wait()
+
+	if got := original.String(); got != before {
+		t.Fatalf("the original changed under a shared copy: %s -> %s", before, got)
+	}
+	if duplicate.String() != before {
+		t.Fatalf("the copy diverged from the original: %s", duplicate.String())
+	}
 }

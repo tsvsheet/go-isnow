@@ -179,3 +179,20 @@ func TestStarAnchorStepCanonical(t *testing.T) {
 		t.Fatalf("Canonical = %q", got)
 	}
 }
+
+// TestErrSyntaxIsMatchableDirectlyByEveryCaller asserts the sentinel with a
+// literal errors.Is, not through a helper's parameter. A caller outside this
+// package writes exactly this line, and if Parse ever stopped wrapping the
+// sentinel the helper-based tests would keep passing — they compare against
+// whatever they were handed.
+func TestErrSyntaxIsMatchableDirectlyByEveryCaller(t *testing.T) {
+	t.Parallel()
+	_, err := Parse("5-")
+
+	if !errors.Is(err, constants.ErrSyntax) {
+		t.Fatalf("Parse err = %v, want errors.Is(..., ErrSyntax)", err)
+	}
+	if errors.Is(err, constants.ErrRange) {
+		t.Fatalf("a syntax error must not also match ErrRange: %v", err)
+	}
+}

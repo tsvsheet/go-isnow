@@ -250,3 +250,51 @@ func TestBareWeekUnitIsNotAnInterval(t *testing.T) {
 		t.Fatalf("bare week step: %v", err)
 	}
 }
+
+// TestOnBoundaryRequiresEveryFinerFieldToBeZero pins what "on a grain boundary"
+// means, one grain at a time. An interval anchors to boundaries, so a grain that
+// accepted 12:30:45 as an hour boundary would fire an hourly pattern at a minute
+// nobody asked for — and only for whoever first evaluated it off the hour.
+func TestOnBoundaryRequiresEveryFinerFieldToBeZero(t *testing.T) {
+	t.Parallel()
+	onTheHour := instantCtx{hour: 13, minute: 0, second: 0}
+	pastTheHour := instantCtx{hour: 13, minute: 30, second: 0}
+	pastTheMinute := instantCtx{hour: 13, minute: 30, second: 45}
+
+	for name, tc := range map[string]struct {
+		unit intervalUnit
+		ctx  instantCtx
+		want bool
+	}{
+		"a second boundary is every instant":  {unitSecond, pastTheMinute, true},
+		"a minute boundary needs second zero": {unitMinute, pastTheMinute, false},
+		"and accepts one":                     {unitMinute, pastTheHour, true},
+		"an hour boundary needs minute zero":  {unitHour, pastTheHour, false},
+		"and accepts the hour":                {unitHour, onTheHour, true},
+		"a day boundary needs midnight":       {unitDay, onTheHour, false},
+	} {
+		if got := tc.unit.onBoundary(tc.ctx); got != tc.want {
+			t.Errorf("%s: onBoundary = %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+// TestMinContainerIsAlwaysCoarserThanItsGrain pins the floor of the container
+// search. A grain anchored within its own kind would anchor to itself — every
+// instant a boundary — and the search would never narrow.
+func TestMinContainerIsAlwaysCoarserThanItsGrain(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		unit intervalUnit
+		want container
+	}{
+		{unitSecond, cMinute},
+		{unitMinute, cHour},
+		{unitHour, cDay},
+		{unitDay, cWeek},
+	} {
+		if got := tc.unit.minContainer(); got != tc.want {
+			t.Errorf("minContainer(%v) = %v, want %v", tc.unit, got, tc.want)
+		}
+	}
+}

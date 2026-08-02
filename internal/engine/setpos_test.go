@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -80,5 +81,37 @@ func TestFuzzRegressions(t *testing.T) {
 	// An overflow member in a from-end unit compound invalidates the tail.
 	if _, err := Parse("*/*/-10000000000000000000d2 *:*:00"); !errors.Is(err, constants.ErrRange) {
 		t.Fatalf("overflow compound should be range: %v", err)
+	}
+}
+
+// TestMonthRankCountsFromWhicheverEdgeWasNamed pins the counting direction.
+// "the second Tuesday" and "the second-to-last Tuesday" are different days in
+// most months and the same day in some, so a rank counted from the wrong edge
+// is wrong in a way that looks right roughly half the time — the worst
+// signature a scheduling bug can have.
+func TestMonthRankCountsFromWhicheverEdgeWasNamed(t *testing.T) {
+	t.Parallel()
+	// July 2026: Wednesdays fall on the 1st, 8th, 15th, 22nd and 29th.
+	second, err := Parse("*/*/* W+[2] 12:00")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	fromEnd, err := Parse("*/*/* W-[1] 12:00")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	start := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	gotSecond, ok, _ := second.NextContext(context.Background(), start)
+	if !ok {
+		t.Fatal("no match for the second Wednesday")
+	}
+	gotLast, ok, _ := fromEnd.NextContext(context.Background(), start)
+	if !ok {
+		t.Fatal("no match for the last Wednesday")
+	}
+
+	if gotSecond.Day() == gotLast.Day() {
+		t.Fatalf("counting from each edge gave the same day (%d); the direction is not being honoured", gotSecond.Day())
 	}
 }
