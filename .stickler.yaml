@@ -1,0 +1,13 @@
+# Per-repo stickler overlay.
+#
+# Soft-finding baselines recorded at SUITE ADOPTION (2026-08-08) — the counts as
+# found on first contact, not a target. The ratchet allows them to FALL and
+# never grow.
+#
+# Both entries are enum-discrimination debt: `exhaustive` and yze/enumdiscrim
+# each flag a switch or map that ignores a member of its enum. Every one is a
+# real gap waiting for someone to add a member, but closing one means deciding
+# what the missing branch should DO — a design question per site, not an edit.
+soft-baseline:
+  yze/enumdiscrim: 20
+  exhaustive: 18
