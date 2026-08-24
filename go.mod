@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/antlr4-go/antlr/v4 v4.13.1
-	github.com/gomatic/go-error v0.3.15
+	github.com/gomatic/go-error v0.3.17
 	gopkg.in/yaml.v3 v3.0.1
 )
 
